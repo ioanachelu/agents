@@ -1,7 +1,7 @@
 # Python
 __pycache__/
 *.py[cod]
-
+logs
 # Pip
 pip-selfcheck.json
 *.whl

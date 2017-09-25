@@ -249,7 +249,10 @@ class RangeNormalize(object):
     return observ
 
   def _is_finite(self, space):
-    return np.isfinite(space.low).all() and np.isfinite(space.high).all()
+    if type(space) is gym.spaces.discrete.Discrete:
+      return True
+    else:
+      return np.isfinite(space.low).all() and np.isfinite(space.high).all()
 
 
 class ClipAction(object):

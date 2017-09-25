@@ -33,7 +33,7 @@ import tensorflow as tf
 from agents import tools
 from agents.scripts import configs
 from agents.scripts import utility
-
+# import gym_fast_envs
 
 def _create_environment(config):
   """Constructor for an instance of the environment.
@@ -154,7 +154,7 @@ if __name__ == '__main__':
       'logdir', None,
       'Base directory to store logs.')
   tf.app.flags.DEFINE_string(
-      'timestamp', datetime.datetime.now().strftime('%Y%m%dT%H%M%S'),
+      'timestamp', "test", #"#datetime.datetime.now().strftime('%Y%m%dT%H%M%S'),
       'Sub directory to store logs.')
   tf.app.flags.DEFINE_string(
       'config', None,

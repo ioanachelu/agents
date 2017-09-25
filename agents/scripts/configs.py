@@ -20,14 +20,14 @@ from __future__ import print_function
 
 # pylint: disable=unused-variable
 
-from agents import ppo
+from agents import aoc
 from agents.scripts import networks
 
 
 def default():
   """Default configuration for PPO."""
   # General
-  algorithm = ppo.PPOAlgorithm
+  # algorithm = ppo.PPOAlgorithm
   num_agents = 10
   eval_episodes = 25
   use_gpu = False
@@ -55,6 +55,34 @@ def default():
   kl_cutoff_factor = 2
   kl_cutoff_coef = 1000
   kl_init_penalty = 1
+  return locals()
+
+def four_rooms():
+  locals().update(default())
+  algorithm = aoc.AOCAlgorithm
+  num_agents = 10
+  use_gpu = False
+  # Network
+  network = networks.AOCPolicy
+  weight_summaries = dict(
+      all=r'.*',
+      policy=r'.*/policy/.*',
+      value=r'.*/value/.*')
+  conv_layers = (8, 4, 16), (4, 2, 32)
+  fc_layers = 256,
+  # Optimization
+  network_optimizer = 'AdamOptimizer'
+  lr = 0.0007
+  # Losses
+  discount = 0.99
+  entropy_coef = 0.01
+  critic_coef = 0.5
+  clip_gradient_value = 40
+  nb_options = 2
+  update_every = 10
+  env = 'Breakout-v0'
+  max_length = 100
+  steps = 1e6  # 1M
   return locals()
 
 
