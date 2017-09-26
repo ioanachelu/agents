@@ -21,6 +21,7 @@ from __future__ import print_function
 # pylint: disable=unused-variable
 
 from agents import aoc
+from agents.aoc import AOCAlgorithm
 from agents.scripts import networks
 
 
@@ -57,9 +58,9 @@ def default():
   kl_init_penalty = 1
   return locals()
 
-def four_rooms():
+def aoc():
   locals().update(default())
-  algorithm = aoc.AOCAlgorithm
+  algorithm = AOCAlgorithm
   num_agents = 10
   use_gpu = False
   # Network
@@ -80,9 +81,10 @@ def four_rooms():
   clip_gradient_value = 40
   nb_options = 2
   update_every = 10
-  env = 'Breakout-v0'
+  env = 'Breakout-v4'
   max_length = 100
   steps = 1e6  # 1M
+  past_indices = 0, -1, -2, -3
   return locals()
 
 

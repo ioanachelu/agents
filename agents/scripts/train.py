@@ -50,8 +50,8 @@ def _create_environment(config):
     env = config.env()
   if config.max_length:
     env = tools.wrappers.LimitDuration(env, config.max_length)
-  env = tools.wrappers.RangeNormalize(env)
-  env = tools.wrappers.ClipAction(env)
+  env = tools.wrappers.FrameHistory(env, config.past_indices, False)
+  # env = tools.wrappers.ClipAction(env)
   env = tools.wrappers.ConvertTo32Bit(env)
   return env
 
@@ -103,8 +103,8 @@ def train(config, env_processes):
   with config.unlocked:
     config.network = functools.partial(
         utility.define_network, config.network, config)
-    config.policy_optimizer = getattr(tf.train, config.policy_optimizer)
-    config.value_optimizer = getattr(tf.train, config.value_optimizer)
+    # config.policy_optimizer = getattr(tf.train, config.policy_optimizer)
+    config.network_optimizer = getattr(tf.train, config.network_optimizer)
   if config.update_every % config.num_agents:
     tf.logging.warn('Number of agents should divide episodes per update.')
   with tf.device('/cpu:0'):
