@@ -84,7 +84,11 @@ def aoc():
   env = 'Breakout-v4'
   max_length = 100
   steps = 1e6  # 1M
+  explore_steps = 1e5
+  final_random_action_prob = 0.05
+  initial_random_action_prob = 1.0
   past_indices = 0, -1, -2, -3
+  delib_cost = 0
   return locals()
 
 

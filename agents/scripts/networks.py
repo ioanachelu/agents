@@ -135,8 +135,8 @@ class AOCPolicy(tf.contrib.rnn.RNNCell):
 
   @property
   def output_size(self):
-    return (tf.TensorShape([self._nb_envs, self._nb_options]), tf.TensorShape([self._nb_envs, self._nb_options]),
-            tf.TensorShape([self._nb_envs, self._nb_options, self._action_size]))
+    return (tf.TensorShape([self._nb_options]), tf.TensorShape([self._nb_options]),
+            tf.TensorShape([self._nb_options, self._action_size]))
 
   def __call__(self, observation, state):
     with tf.variable_scope('conv'):
