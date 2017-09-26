@@ -121,6 +121,9 @@ class FrameHistory(object):
     self._buffer = None
     self._capacity = max(past_indices)
     self._flatten = flatten
+    self.resize = True
+    self.resized_width = 84
+    self.resized_height = 84
 
   def __getattr__(self, name):
     return getattr(self._env, name)

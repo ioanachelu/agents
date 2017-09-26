@@ -121,11 +121,12 @@ class RecurrentGaussianPolicy(tf.contrib.rnn.RNNCell):
 class AOCPolicy(tf.contrib.rnn.RNNCell):
 
   def __init__(
-      self, conv_layers, fc_layers, action_size, nb_options):
+      self, conv_layers, fc_layers, action_size, nb_options, nb_envs):
     self._conv_layers = conv_layers
     self._fc_layers = fc_layers
     self._action_size = action_size
     self._nb_options = nb_options
+    self._nb_envs = nb_envs
 
   @property
   def state_size(self):
@@ -134,7 +135,8 @@ class AOCPolicy(tf.contrib.rnn.RNNCell):
 
   @property
   def output_size(self):
-    return (1, 1, tf.TensorShape([]))
+    return (tf.TensorShape([self._nb_envs, self._nb_options]), tf.TensorShape([self._nb_envs, self._nb_options]),
+            tf.TensorShape([self._nb_envs, self._nb_options, self._action_size]))
 
   def __call__(self, observation, state):
     with tf.variable_scope('conv'):
@@ -166,7 +168,8 @@ class AOCPolicy(tf.contrib.rnn.RNNCell):
                                             activation_fn=tf.nn.softmax,
                                             variables_collections=tf.get_collection("variables"),
                                             outputs_collections="activations")
-        self.options.append(option)
+        self.options.append(tf.expand_dims(option, 1))
+      self.options = tf.concat(self.options, 1)
 
     return (self.termination, self.q_val, self.options), state
 

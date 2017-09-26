@@ -154,7 +154,7 @@ if __name__ == '__main__':
       'logdir', None,
       'Base directory to store logs.')
   tf.app.flags.DEFINE_string(
-      'timestamp', "test", #"#datetime.datetime.now().strftime('%Y%m%dT%H%M%S'),
+      'timestamp', datetime.datetime.now().strftime('%Y%m%dT%H%M%S'),
       'Sub directory to store logs.')
   tf.app.flags.DEFINE_string(
       'config', None,

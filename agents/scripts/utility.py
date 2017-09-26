@@ -131,7 +131,7 @@ def define_network(constructor, config, action_size):
     Created recurrent cell object.
   """
   network = constructor(
-      config.conv_layers, config.fc_layers, action_size, config.nb_options)
+      config.conv_layers, config.fc_layers, action_size, config.nb_options, config.num_agents)
   return network
 
 def initialize_variables(sess, saver, logdir, checkpoint=None, resume=None):
