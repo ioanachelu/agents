@@ -30,8 +30,8 @@ class AOCAlgorithm(object):
     self._nb_options = config.nb_options
     self._action_size = self._batch_env._batch_env._envs[0]._action_space.n
     self._num_agents = self._config.num_agents
-    self._option_terminated = np.asarray(self._num_agents * [True])
-
+    self._option_terminated = tf.convert_to_tensor(np.asarray(self._num_agents * [True]), dtype=tf.bool)
+    self._frame_counter = np.asarray(self._num_agents * [0])
 
     self._random = tf.random_uniform(shape=[(self._config.num_agents)], minval=0., maxval=1., dtype=tf.float32)
     self._exploration_options = LinearSchedule(self._config.explore_steps, self._config.final_random_action_prob,
@@ -46,7 +46,7 @@ class AOCAlgorithm(object):
       name='normalize_reward')
     # Memory stores tuple of observ, action, mean, logstd, reward.
     template = (
-      self._batch_env.observ[0], self._batch_env.action[0],
+      self._batch_env.observ[0], self._batch_env.action[0], self._batch_env.action[0],
       self._batch_env.reward[0], self._batch_env.observ[0],
       self._batch_env.reward[0])
     self._memory = memory.EpisodeMemory(
@@ -73,18 +73,22 @@ class AOCAlgorithm(object):
     with tf.name_scope('begin_episode/'):
       reset_state = utility.reinit_nested_vars(self._last_state, agent_indices)
       reset_buffer = self._episodes.clear(agent_indices)
-      self._delib_cost = self._num_agents * [self._config.delib_cost]
-
+      self._delib_cost = np.asarray(self._num_agents * [self._config.delib_cost])
+      self._frame_counter = np.asarray(self._num_agents * [0])
+      self._t_counter = np.asarray(self._num_agents * [0])
       with tf.control_dependencies([reset_state, reset_buffer]):
         return tf.constant('')
 
   def perform(self, observ):
     with tf.name_scope('perform/'):
       observ = self._observ_filter.transform(observ)
-      network = self._network(
+      self.network = network = self._network(
         observ[:, None], tf.ones(observ.shape[0]), self._last_state)
 
-      self._current_option[self._option_terminated] = self.get_policy_over_options(network)[self._option_terminated]
+      next_options = self.get_policy_over_options(network)
+      self._current_option = tf.map_fn(lambda i: tf.cond(self._option_terminated[i], next_options[i], self._current_option[i]),
+                                       tf.range(self._num_agents))
+      # self._current_option[self._option_terminated] = self.get_policy_over_options(network)[self._option_terminated]
 
       action = self.get_action(network)
 
@@ -102,16 +106,21 @@ class AOCAlgorithm(object):
       self._observ_filter.update(observ),
       self._reward_filter.update(reward)])
 
+    norm_observ = self._observ_filter.transform(observ)
+    norm_reward = self._reward_filter.transform(reward)
+
     with tf.control_dependencies([update_filters]):
       # if self._config.train_on_agent_action:
       #   # NOTE: Doesn't seem to change much.
       #   action = self._last_action
       self._frame_counter += 1
-      self.new_reward = reward - \
+      new_reward = norm_reward - \
                         np.asarray(self._option_terminated, dtype=np.float32) * \
-                        self._delib_cost * float()
+                        self._delib_cost * self._frame_counter
 
+      self._option_terminated = self.get_termination(norm_observ)
 
+      batch = observ, self._current_option, action, new_reward, done, nextob, self._option_terminated
       append = self._episodes.append(batch, tf.range(len(self._batch_env)))
     with tf.control_dependencies([append]):
       norm_observ = self._observ_filter.transform(observ)
@@ -160,5 +169,10 @@ class AOCAlgorithm(object):
                                       reduction_indices=1, name="P_a")
     policy = tf.multinomial(tf.log(self.action_probabilities), 1)[:, 0]
     return policy
+
+  def get_termination(self):
+    termination_probabilities = self.network.termination[self._current_option]
+    terminated = termination_probabilities > self._random
+    return terminated
 
 
