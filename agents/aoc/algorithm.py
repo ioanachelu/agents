@@ -9,6 +9,8 @@ import collections
 from agents.aoc import memory
 from agents.aoc import normalize
 from agents.aoc import utility
+import numpy as np
+
 from agents.aoc.schedules import LinearSchedule
 
 
@@ -22,11 +24,15 @@ class AOCAlgorithm(object):
     self._step = step
     self._is_training = is_training
     self._should_log = should_log
-    self._option_terminated = True
+
     self._config = config
-    self._nb_options= config.nb_options
+    self._frame_counter = 0
+    self._nb_options = config.nb_options
     self._action_size = self._batch_env._batch_env._envs[0]._action_space.n
     self._num_agents = self._config.num_agents
+    self._option_terminated = np.asarray(self._num_agents * [True])
+
+
     self._random = tf.random_uniform(shape=[(self._config.num_agents)], minval=0., maxval=1., dtype=tf.float32)
     self._exploration_options = LinearSchedule(self._config.explore_steps, self._config.final_random_action_prob,
                                                self._config.initial_random_action_prob)
@@ -67,7 +73,7 @@ class AOCAlgorithm(object):
     with tf.name_scope('begin_episode/'):
       reset_state = utility.reinit_nested_vars(self._last_state, agent_indices)
       reset_buffer = self._episodes.clear(agent_indices)
-      self.delib_cost = self._config.delib_cost
+      self._delib_cost = self._num_agents * [self._config.delib_cost]
 
       with tf.control_dependencies([reset_state, reset_buffer]):
         return tf.constant('')
@@ -78,15 +84,48 @@ class AOCAlgorithm(object):
       network = self._network(
         observ[:, None], tf.ones(observ.shape[0]), self._last_state)
 
-      if self._option_terminated:
-        self._current_option = self.get_policy_over_options(network)
+      self._current_option[self._option_terminated] = self.get_policy_over_options(network)[self._option_terminated]
 
       action = self.get_action(network)
 
     return tf.cast(action, dtype=tf.int32) , tf.constant('')
 
-  def experience(self, *unused_transition):
-    return tf.constant('')
+  def experience(self, observ, action, reward, done, nextob):
+    with tf.name_scope('experience/'):
+      return tf.cond(
+        self._is_training,
+        lambda: self._define_experience(observ, action, reward, done, nextob), str)
+
+  def _define_experience(self, observ, action, reward, done, nextob):
+    """Implement the branch of experience() entered during training."""
+    update_filters = tf.summary.merge([
+      self._observ_filter.update(observ),
+      self._reward_filter.update(reward)])
+
+    with tf.control_dependencies([update_filters]):
+      # if self._config.train_on_agent_action:
+      #   # NOTE: Doesn't seem to change much.
+      #   action = self._last_action
+      self._frame_counter += 1
+      self.new_reward = reward - \
+                        np.asarray(self._option_terminated, dtype=np.float32) * \
+                        self._delib_cost * float()
+
+
+      append = self._episodes.append(batch, tf.range(len(self._batch_env)))
+    with tf.control_dependencies([append]):
+      norm_observ = self._observ_filter.transform(observ)
+      norm_reward = tf.reduce_mean(self._reward_filter.transform(reward))
+      # pylint: disable=g-long-lambda
+      summary = tf.cond(self._should_log, lambda: tf.summary.merge([
+        update_filters,
+        self._observ_filter.summary(),
+        self._reward_filter.summary(),
+        tf.summary.scalar('memory_size', self._memory_index),
+        tf.summary.histogram('normalized_observ', norm_observ),
+        tf.summary.histogram('action', self._last_action),
+        tf.summary.scalar('normalized_reward', norm_reward)]), str)
+      return summary
 
   def end_episode(self, unused_agent_indices):
     return tf.constant('')
