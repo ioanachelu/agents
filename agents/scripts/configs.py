@@ -61,7 +61,7 @@ def default():
 def aoc():
   locals().update(default())
   algorithm = AOCAlgorithm
-  num_agents = 10
+  num_agents = 2
   use_gpu = False
   # Network
   network = networks.AOCPolicy
@@ -80,7 +80,7 @@ def aoc():
   critic_coef = 0.5
   clip_gradient_value = 40
   nb_options = 2
-  update_every = 10
+  update_every = 25
   env = 'Breakout-v4'
   max_length = 100
   steps = 1e6  # 1M
