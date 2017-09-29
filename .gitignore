@@ -7,7 +7,7 @@ pip-selfcheck.json
 *.whl
 *.egg
 *.egg-info
-
+.idea
 # Setuptools
 /build
 /dist
