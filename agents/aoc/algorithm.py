@@ -25,7 +25,6 @@ class AOCAlgorithm(object):
     self._step = step
     self._is_training = is_training
     self._should_log = should_log
-    self.t_step = 0
 
     self._config = config
     self._frame_counter = 0
@@ -50,20 +49,18 @@ class AOCAlgorithm(object):
       self._network(
         tf.zeros_like(self._batch_env.observ)[:, None],
         tf.ones(len(self._batch_env)), reuse=None)
-      cell = self._config.network(self._batch_env._batch_env._envs[0]._action_space.n)
+      cell = self._config.network(self._action_size)
 
       self._option_terminated = tf.Variable(
-        tf.zeros([self._num_agents], dtype=tf.bool), False, name='option_terminated', dtype=tf.bool)
+        np.zeros([self._num_agents], dtype=np.bool), False, name='option_terminated', dtype=tf.bool)
       self._frame_counter = tf.Variable(
-        tf.zeros([self._num_agents], dtype=tf.float32), False, name='frame_counter', dtype=tf.float32)
+        np.zeros([self._num_agents], dtype=np.float32), False, name='frame_counter', dtype=tf.float32)
       self._current_option = tf.Variable(
-        tf.zeros([self._num_agents], dtype=tf.int32), False, name='current_option')
+        np.zeros([self._num_agents], dtype=np.int32), False, name='current_option')
       self._random = tf.random_uniform(shape=[(self._config.num_agents)], minval=0., maxval=1., dtype=tf.float32)
 
       self._delib_cost = tf.Variable(np.asarray(self._num_agents * [self._config.delib_cost]),
                                       False, name="delib_cost", dtype=tf.float32)
-      self._t_counter = tf.Variable(0, dtype=tf.int32)
-      self._increment_t_counter = self._t_counter.assign_add(1)
 
       self._network_optimizer = self._config.network_optimizer(
         self._config.lr, name='network_optimizer')
@@ -80,8 +77,8 @@ class AOCAlgorithm(object):
         template, len(batch_env), config.max_length, 'episodes')
       self._last_state = utility.create_nested_vars(
         cell.zero_state(len(batch_env), tf.float32))
-      self._last_action = tf.Variable(
-        tf.zeros_like(self._batch_env.action), False, name='last_action')
+      # self._last_action = tf.Variable(
+      #   tf.zeros_like(self._batch_env.action), False, name='last_action')
 
   def begin_episode(self, agent_indices):
     with tf.name_scope('begin_episode/'):
@@ -102,21 +99,20 @@ class AOCAlgorithm(object):
 
 
   def perform(self, observ):
-    with tf.control_dependencies([self._increment_t_counter]):
-      with tf.name_scope('perform/'):
-        observ = self._observ_filter.transform(observ)
-        self.network = network = self._network(
-          observ[:, None], tf.ones(observ.shape[0]), self._last_state)
+    with tf.name_scope('perform/'):
+      observ = self._observ_filter.transform(observ)
+      self.network = network = self._network(
+        observ[:, None], tf.ones(observ.shape[0]), self._last_state)
 
-        next_options = self.get_policy_over_options(network)
-        self._current_option = tf.map_fn(lambda i: tf.cond(self._option_terminated[i], lambda: next_options[i],
-                                                           lambda: self._current_option[i]),
-                                                           tf.range(self._num_agents))
-        # self._current_option[self._option_terminated] = self.get_policy_over_options(network)[self._option_terminated]
+      next_options = self.get_policy_over_options(network)
+      self._current_option = tf.map_fn(lambda i: tf.cond(self._option_terminated[i], lambda: next_options[i],
+                                                         lambda: self._current_option[i]),
+                                                         tf.range(self._num_agents))
+      # self._current_option[self._option_terminated] = self.get_policy_over_options(network)[self._option_terminated]
 
-        action = self.get_action(network)
+      action = self.get_action(network)
 
-      return tf.cast(action, dtype=tf.int32) , tf.constant('')
+    return tf.cast(action, dtype=tf.int32) , tf.constant('')
 
   def experience(self, observ, action, reward, done, nextob, agent_indices):
     with tf.name_scope('experience/'):
@@ -200,7 +196,7 @@ class AOCAlgorithm(object):
 
 
   def get_policy_over_options(self, network):
-    self.probability_of_random_option = self._exploration_options.value(self.t_step)
+    self.probability_of_random_option = self._exploration_options.value(self._step)
     max_options = tf.cast(tf.argmax(network.q_val[:, 0,:], 1), dtype=tf.int32)
     exp_options = tf.random_uniform(shape=[self._num_agents], minval=0, maxval=self._config.nb_options,
                               dtype=tf.int32)
@@ -254,15 +250,16 @@ class AOCAlgorithm(object):
         return tf.summary.merge([network_summary, weight_summary])
 
   def _update_network(self, observ, option, action, reward, done, nextob, option_terminated, agent_index, length):
-    self.probability_of_random_option = self._exploration_options.value(self.t_step)
+    self.probability_of_random_option = self._exploration_options.value(self._step)
     with tf.name_scope('update_network'):
       # add delib if  option termination because it isn't part of V
       delib = self._delib_cost * tf.cast(self._frame_counter > 1, dtype=np.float32)
       network = self._network(observ, length)
+      network_next = self._network(nextob, length)
       # raw_v = tf.reduce_sum(tf.multiply(self.get_V(network), tf.one_hot(length, self._config.max_length)), axis=1)
-      v = self.get_V(network) - tf.tile(tf.expand_dims(delib[agent_index], 1), [1, self._config.max_length])
+      v = self.get_V(network_next) - tf.tile(tf.expand_dims(delib[agent_index], 1), [1, self._config.max_length])
       # q = tf.reduce_sum(tf.multiply(self.get_Q(network, option), tf.one_hot(length, self._config.max_length)), axis=1)
-      q = self.get_Q(network, option)
+      q = self.get_Q(network_next, option)
       new_v = tf.map_fn(lambda i: tf.cond(option_terminated[i], lambda: v[i], lambda: q[i]), tf.range(self._config.max_length))
       R = tf.cast(tf.logical_not(done), dtype=tf.float32) * new_v
 
@@ -280,19 +277,19 @@ class AOCAlgorithm(object):
       intra_option_policy = self.get_intra_option_policy(option)
       responsible_outputs = self.get_responsible_outputs(intra_option_policy, action)
       with tf.name_scope('critic_loss'):
-        td_error = advantage - self.get_Q(network, option)
-        critic_loss = tf.reduce_mean(self._config.critic_coef * 0.5 * tf.square((td_error))
+        td_error = advantage - q_opt
+        critic_loss = tf.reduce_mean(self._config.critic_coef * 0.5 * tf.square((td_error)))
       with tf.name_scope('termination_loss'):
         term_loss = -tf.reduce_mean(network.termination * (tf.stop_gradient(q_opt) - tf.stop_gradient(v) +
                                                           tf.tile(tf.expand_dims(delib[agent_index], 1),
                                                                   [1, self._config.max_length])))
       with tf.name_scope('entropy_loss'):
-        entropy_loss = self._config.entropy_coef * tf.reduce_mean(tf.reduce_sum(self.intra_option_policy *
-                                                                                tf.log(self.intra_option_policy +
+        entropy_loss = self._config.entropy_coef * tf.reduce_mean(tf.reduce_sum(intra_option_policy *
+                                                                                tf.log(intra_option_policy +
                                                                                        1e-7), axis=2))
       with tf.name_scope('policy_loss'):
         policy_loss = -tf.reduce_sum(
-                    tf.log(self.responsible_outputs + 1e-7) * advantage)
+                    tf.log(responsible_outputs + 1e-7) * advantage)
 
       total_loss = policy_loss + entropy_loss + critic_loss + term_loss
 
@@ -301,7 +298,6 @@ class AOCAlgorithm(object):
       optimize = self._network_optimizer.apply_gradients(
         zip(gradients, variables))
       summary = tf.summary.merge([
-        summary,
         tf.summary.scalar('gradient_norm', tf.global_norm(gradients)),
         utility.gradient_summaries(
           zip(gradients, variables))])

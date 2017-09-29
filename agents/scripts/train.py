@@ -50,7 +50,7 @@ def _create_environment(config):
     env = config.env()
   if config.max_length:
     env = tools.wrappers.LimitDuration(env, config.max_length)
-  env = tools.wrappers.FrameHistory(env, config.past_indices, False)
+  env = tools.wrappers.FrameHistoryGrayscaleResize(env, config.past_indices, False)
   # env = tools.wrappers.ClipAction(env)
   env = tools.wrappers.ConvertTo32Bit(env)
   return env

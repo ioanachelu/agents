@@ -556,3 +556,80 @@ class ConvertTo32Bit(object):
     if not np.isfinite(reward).all():
       raise ValueError('Infinite reward encountered.')
     return np.array(reward, dtype=np.float32)
+
+class FrameHistoryGrayscaleResize(object):
+  """Augment the observation with past observations by taking the maximum."""
+
+  def __init__(self, env, past_indices, flatten):
+    """Augment the observation with past observations.
+
+    Implemented as a Numpy ring buffer holding the necessary past observations.
+
+    Args:
+      env: OpenAI Gym environment to wrap.
+      past_indices: List of non-negative integers indicating the time offsets
+        from the current time step of observations to include.
+      flatten: Concatenate the past observations rather than stacking them.
+
+    Raises:
+      KeyError: The current observation is not included in the indices.
+    """
+    if 0 not in past_indices:
+      raise KeyError('Past indices should include 0 for the current frame.')
+    self._env = env
+    self._past_indices = past_indices
+    self._step = 0
+    self._buffer = None
+    self._capacity = max(past_indices)
+    self._flatten = flatten
+    self.resize = True
+    self.resized_width = 84
+    self.resized_height = 84
+
+  def __getattr__(self, name):
+    return getattr(self._env, name)
+
+  @property
+  def observation_space(self):
+    low = self._env.observation_space.low
+    low = np.resize(low, [self.resized_width, self.resized_height, 1])
+    high = self._env.observation_space.high
+    high = np.resize(high, [self.resized_width, self.resized_height, 1])
+    low = np.repeat(low[None, ...], len(self._past_indices), 0)
+    high = np.repeat(high[None, ...], len(self._past_indices), 0)
+    if self._flatten:
+      low = np.reshape(low, (-1,) + low.shape[2:])
+      high = np.reshape(high, (-1,) + high.shape[2:])
+    return gym.spaces.Box(low, high)
+
+  def get_preprocessed_frame(self, observ):
+    resized_observ = tf.image.resize_images(observ, [self.resized_width, self.resized_height])
+    luminance_observ = resized_observ *  \
+                        tf.tile(tf.convert_to_tensor([.2126, .7152, .0722])[None, None, :],
+                             [self.resized_width, self.resized_height, 1])
+    rescaled_observ = luminance_observ / 255
+
+    return rescaled_observ
+
+  def step(self, action):
+    observ, reward, done, info = self._env.step(action)
+    preprocessed_observ = self.get_preprocessed_frame(observ)
+    self._step += 1
+    self._buffer[self._step % self._capacity] = preprocessed_observ
+    observ = self._select_frames()
+    return observ, reward, done, info
+
+  def reset(self):
+    observ = self._env.reset()
+    preprocessed_observ = self.get_preprocessed_frame(observ)
+    self._buffer = np.repeat(preprocessed_observ[None, ...], self._capacity, 0)
+    self._step = 0
+    return self._select_frames()
+
+  def _select_frames(self):
+    indices = [
+        (self._step - index) % self._capacity for index in self._past_indices]
+    observ = self._buffer[indices]
+    if self._flatten:
+      observ = np.reshape(observ, (-1,) + observ.shape[2:])
+    return observ
