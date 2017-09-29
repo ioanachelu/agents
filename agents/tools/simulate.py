@@ -59,7 +59,7 @@ def simulate(batch_env, algo, log=True, reset=False):
     with tf.control_dependencies(reset_ops):
       return algo.begin_episode(agent_indices)
 
-  def _define_step():
+  def _define_step(agent_indices):
     """Request actions from the algorithm and apply them to the environments.
 
     Increments the lengths of all episodes and increases their scores by the
@@ -69,6 +69,7 @@ def simulate(batch_env, algo, log=True, reset=False):
     Returns:
       Summary tensor.
     """
+    assert agent_indices.shape.ndims == 1
     prevob = batch_env.observ + 0  # Ensure a copy of the variable value.
     action, step_summary = algo.perform(prevob)
     action.set_shape(batch_env.action.shape)
@@ -78,7 +79,7 @@ def simulate(batch_env, algo, log=True, reset=False):
     with tf.control_dependencies([add_score, inc_length]):
       experience_summary = algo.experience(
           prevob, batch_env.action, batch_env.reward, batch_env.done,
-          batch_env.observ)
+          batch_env.observ, agent_indices)
     return tf.summary.merge([step_summary, experience_summary])
 
   def _define_end_episode(agent_indices):
@@ -131,7 +132,7 @@ def simulate(batch_env, algo, log=True, reset=False):
         tf.cast(tf.shape(agent_indices)[0], tf.bool),
         lambda: _define_begin_episode(agent_indices), str)
     with tf.control_dependencies([begin_episode]):
-      step = _define_step()
+      step = _define_step(agent_indices)
     with tf.control_dependencies([step]):
       agent_indices = tf.cast(tf.where(batch_env.done)[:, 0], tf.int32)
       end_episode = tf.cond(

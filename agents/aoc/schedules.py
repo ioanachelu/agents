@@ -44,9 +44,9 @@ class TFLinearSchedule(object):
         final_p: float
             final output value
         """
-        self.schedule_timesteps = tf.Constant(schedule_timesteps, dtype=tf.float32)
-        self.final_p = tf.Constant(final_p, dtype=tf.float32)
-        self.initial_p = tf.Constant(initial_p, dtype=tf.float32)
+        self.schedule_timesteps = tf.constant(schedule_timesteps, dtype=tf.float32)
+        self.final_p = tf.constant(final_p, dtype=tf.float32)
+        self.initial_p = tf.constant(initial_p, dtype=tf.float32)
         # self.fraction = tf.Variable(0.0, dtype=tf.float32)
         # self.steps = 0
 
@@ -54,7 +54,7 @@ class TFLinearSchedule(object):
         """See Schedule.value"""
         # t = self.steps
         fraction = tf.minimum(tf.cast(t, dtype=tf.float32) / self.schedule_timesteps,
-                              tf.Constant(1.0, dtype=tf.float32))
+                              tf.constant(1.0, dtype=tf.float32))
         # self.steps += 1
 
         return self.initial_p + fraction * (self.final_p - self.initial_p)
