@@ -36,9 +36,9 @@ class AOCAlgorithm(object):
                                                self._config.initial_random_action_prob)
     self._exploration_policies = TFLinearSchedule(self._config.explore_steps, self._config.final_random_action_prob,
                                                 self._config.initial_random_action_prob)
-    self._observ_filter = normalize.StreamingNormalize(
-      self._batch_env.observ[0], center=True, scale=True, clip=5,
-      name='normalize_observ')
+    # self._observ_filter = normalize.StreamingNormalize(
+    #   self._batch_env.observ[0], center=True, scale=True, clip=5,
+    #   name='normalize_observ')
     self._reward_filter = normalize.StreamingNormalize(
       self._batch_env.reward[0], center=False, scale=True, clip=10,
       name='normalize_reward')
@@ -54,7 +54,7 @@ class AOCAlgorithm(object):
       self._option_terminated = tf.Variable(
         np.zeros([self._num_agents], dtype=np.bool), False, name='option_terminated', dtype=tf.bool)
       self._frame_counter = tf.Variable(
-        np.zeros([self._num_agents], dtype=np.float32), False, name='frame_counter', dtype=tf.float32)
+        np.zeros([self._num_agents], dtype=np.int32), False, name='frame_counter', dtype=tf.int32)
       self._current_option = tf.Variable(
         np.zeros([self._num_agents], dtype=np.int32), False, name='current_option')
       self._random = tf.random_uniform(shape=[(self._config.num_agents)], minval=0., maxval=1., dtype=tf.float32)
@@ -100,14 +100,13 @@ class AOCAlgorithm(object):
 
   def perform(self, observ):
     with tf.name_scope('perform/'):
-      observ = self._observ_filter.transform(observ)
+      # observ = self._observ_filter.transform(observ)
       self.network = network = self._network(
         observ[:, None], tf.ones(observ.shape[0]), self._last_state)
 
       next_options = self.get_policy_over_options(network)
-      self._current_option = tf.map_fn(lambda i: tf.cond(self._option_terminated[i], lambda: next_options[i],
-                                                         lambda: self._current_option[i]),
-                                                         tf.range(self._num_agents))
+      self._current_option = tf.where(self._option_terminated, next_options, self._current_option)
+
       # self._current_option[self._option_terminated] = self.get_policy_over_options(network)[self._option_terminated]
 
       action = self.get_action(network)
@@ -123,10 +122,10 @@ class AOCAlgorithm(object):
   def _define_experience(self, observ, action, reward, done, nextob, agent_indices):
     """Implement the branch of experience() entered during training."""
     update_filters = tf.summary.merge([
-      self._observ_filter.update(observ),
+      # self._observ_filter.update(observ),
       self._reward_filter.update(reward)])
 
-    norm_observ = self._observ_filter.transform(observ)
+    # norm_observ = self._observ_filter.transform(observ)
     norm_reward = self._reward_filter.transform(reward)
 
     with tf.control_dependencies([update_filters]):
@@ -134,12 +133,12 @@ class AOCAlgorithm(object):
       #   # NOTE: Doesn't seem to change much.
       #   action = self._last_action
 
-      increment_frame_counter = self._frame_counter.assign_add(np.asarray(self._num_agents * [1]))
+      increment_frame_counter = self._frame_counter.assign_add(tf.ones(self._num_agents, tf.int32))
 
       float_option_terminated = tf.cast(self._option_terminated, dtype=tf.float32)
 
       new_reward = norm_reward - \
-                   float_option_terminated * self._delib_cost * self._frame_counter
+                   float_option_terminated * self._delib_cost * tf.cast(self._frame_counter, dtype=tf.float32)
 
       self._option_terminated = self.get_termination()
 
@@ -149,11 +148,11 @@ class AOCAlgorithm(object):
       # pylint: disable=g-long-lambda
       summary = tf.cond(self._should_log, lambda: tf.summary.merge([
         update_filters,
-        self._observ_filter.summary(),
+        # self._observ_filter.summary(),
         self._reward_filter.summary(),
         tf.summary.scalar('memory_size', self._memory_index),
         # tf.summary.image(observ),
-        tf.summary.histogram('normalized_observ', norm_observ),
+        tf.summary.histogram('observ', observ),
         tf.summary.scalar('action', action),
         tf.summary.scalar('option', self._current_option),
         tf.summary.scalar('option_terminated', tf.cast(self._option_terminated, dtype=tf.int32)),
@@ -200,13 +199,12 @@ class AOCAlgorithm(object):
     max_options = tf.cast(tf.argmax(network.q_val[:, 0,:], 1), dtype=tf.int32)
     exp_options = tf.random_uniform(shape=[self._num_agents], minval=0, maxval=self._config.nb_options,
                               dtype=tf.int32)
-    options = tf.map_fn(lambda i: tf.cond(self._random[i] > self.probability_of_random_option, lambda: max_options[i],
-                   lambda: exp_options[i]), tf.range(0, self._num_agents))
+    options = tf.where(self._random > self.probability_of_random_option, max_options, exp_options)
     return options
 
   def get_action(self, network):
     current_option_option_one_hot = tf.one_hot(self._current_option, self._nb_options, name="options_one_hot")
-    current_option_option_one_hot = tf.expand_dims(current_option_option_one_hot, 2)
+    current_option_option_one_hot = current_option_option_one_hot[:, :, None]
     current_option_option_one_hot = tf.tile(current_option_option_one_hot, [1, 1, self._action_size])
     self.action_probabilities = tf.reduce_sum(tf.multiply(network.options[:, 0,:], current_option_option_one_hot),
                                       reduction_indices=1, name="P_a")
@@ -257,10 +255,10 @@ class AOCAlgorithm(object):
       network = self._network(observ, length)
       network_next = self._network(nextob, length)
       # raw_v = tf.reduce_sum(tf.multiply(self.get_V(network), tf.one_hot(length, self._config.max_length)), axis=1)
-      v = self.get_V(network_next) - tf.tile(tf.expand_dims(delib[agent_index], 1), [1, self._config.max_length])
+      v = self.get_V(network_next) - tf.tile(delib[:, None], [1, self._config.max_length])
       # q = tf.reduce_sum(tf.multiply(self.get_Q(network, option), tf.one_hot(length, self._config.max_length)), axis=1)
       q = self.get_Q(network_next, option)
-      new_v = tf.map_fn(lambda i: tf.cond(option_terminated[i], lambda: v[i], lambda: q[i]), tf.range(self._config.max_length))
+      new_v = tf.where(option_terminated, v, q)
       R = tf.cast(tf.logical_not(done), dtype=tf.float32) * new_v
 
       advantage = utility.lambda_advantage(reward, R, length, self._config.discount)
@@ -274,14 +272,15 @@ class AOCAlgorithm(object):
 
       q_opt = self.get_Q(network, option)
       v = self.get_V(network)
-      intra_option_policy = self.get_intra_option_policy(option)
+      intra_option_policy = self.get_intra_option_policy(network, option)
       responsible_outputs = self.get_responsible_outputs(intra_option_policy, action)
+      o_termination = self.get_option_termination(network, option)
       with tf.name_scope('critic_loss'):
         td_error = advantage - q_opt
         critic_loss = tf.reduce_mean(self._config.critic_coef * 0.5 * tf.square((td_error)))
       with tf.name_scope('termination_loss'):
-        term_loss = -tf.reduce_mean(network.termination * (tf.stop_gradient(q_opt) - tf.stop_gradient(v) +
-                                                          tf.tile(tf.expand_dims(delib[agent_index], 1),
+        term_loss = -tf.reduce_mean(o_termination * (tf.stop_gradient(q_opt) - tf.stop_gradient(v) +
+                                                          tf.tile(delib[:, None],
                                                                   [1, self._config.max_length])))
       with tf.name_scope('entropy_loss'):
         entropy_loss = self._config.entropy_coef * tf.reduce_mean(tf.reduce_sum(intra_option_policy *
@@ -309,14 +308,19 @@ class AOCAlgorithm(object):
 
   def get_intra_option_policy(self, network, option):
     current_option_option_one_hot = tf.one_hot(option, self._nb_options, name="options_one_hot")
-    current_option_option_one_hot = tf.expand_dims(tf.expand_dims(current_option_option_one_hot, 2), 1)
-    current_option_option_one_hot = tf.tile(current_option_option_one_hot, [1, self._config.max_lenght, 1, self._action_size])
+    current_option_option_one_hot = tf.tile(current_option_option_one_hot[..., None], [1, 1, 1, self._action_size])
     action_probabilities = tf.reduce_sum(tf.multiply(network.options, current_option_option_one_hot),
                                               reduction_indices=2, name="P_a")
     return action_probabilities
 
+  def get_option_termination(self, network, current_option):
+    current_option_option_one_hot = tf.one_hot(current_option, self._nb_options, name="options_one_hot")
+    o_terminations = tf.reduce_sum(tf.multiply(network.termination, current_option_option_one_hot),
+                             reduction_indices=2, name="O_Terminations")
+    return o_terminations
+
   def get_responsible_outputs(self, policy, action):
-    actions_onehot = tf.one_hot(actions, self._action_size, dtype=tf.float32,
+    actions_onehot = tf.one_hot(action, self._action_size, dtype=tf.float32,
                                      name="Actions_Onehot")
     responsible_outputs = tf.reduce_sum(policy * actions_onehot, [2])
     return responsible_outputs

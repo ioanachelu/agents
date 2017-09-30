@@ -154,7 +154,7 @@ class FrameHistory(object):
 
   def _select_frames(self):
     indices = [
-        (self._step - index) % self._capacity for index in self._past_indices]
+        (self._step - index) % self._capacity for index in range(4)]
     observ = self._buffer[indices]
     if self._flatten:
       observ = np.reshape(observ, (-1,) + observ.shape[2:])
@@ -560,7 +560,7 @@ class ConvertTo32Bit(object):
 class FrameHistoryGrayscaleResize(object):
   """Augment the observation with past observations by taking the maximum."""
 
-  def __init__(self, env, past_indices, flatten):
+  def __init__(self, env):
     """Augment the observation with past observations.
 
     Implemented as a Numpy ring buffer holding the necessary past observations.
@@ -574,17 +574,17 @@ class FrameHistoryGrayscaleResize(object):
     Raises:
       KeyError: The current observation is not included in the indices.
     """
-    if 0 not in past_indices:
-      raise KeyError('Past indices should include 0 for the current frame.')
+    # if 0 not in past_indices:
+    #   raise KeyError('Past indices should include 0 for the current frame.')
     self._env = env
-    self._past_indices = past_indices
+    # self._past_indices = past_indices
     self._step = 0
     self._buffer = None
-    self._capacity = max(past_indices)
-    self._flatten = flatten
+    self._capacity = 4
     self.resize = True
     self.resized_width = 84
     self.resized_height = 84
+
 
   def __getattr__(self, name):
     return getattr(self._env, name)
@@ -592,14 +592,12 @@ class FrameHistoryGrayscaleResize(object):
   @property
   def observation_space(self):
     low = self._env.observation_space.low
-    low = np.resize(low, [self.resized_width, self.resized_height, 1])
+    low = np.resize(low, [self.resized_width, self.resized_height])
     high = self._env.observation_space.high
-    high = np.resize(high, [self.resized_width, self.resized_height, 1])
-    low = np.repeat(low[None, ...], len(self._past_indices), 0)
-    high = np.repeat(high[None, ...], len(self._past_indices), 0)
-    if self._flatten:
-      low = np.reshape(low, (-1,) + low.shape[2:])
-      high = np.reshape(high, (-1,) + high.shape[2:])
+    high = np.resize(high, [self.resized_width, self.resized_height])
+    low = np.repeat(low[..., None], self._capacity, 2)
+    high = np.repeat(high[..., None], self._capacity, 2)
+
     return gym.spaces.Box(low, high)
 
   def get_preprocessed_frame(self, observ):
@@ -622,13 +620,15 @@ class FrameHistoryGrayscaleResize(object):
   def reset(self):
     observ = self._env.reset()
     preprocessed_observ = self.get_preprocessed_frame(observ)
-    self._buffer = np.repeat(preprocessed_observ[None, ...], self._capacity, 0)
+    if self.history_length == 1:
+      preprocessed_observ = [None, ...]
+    self._buffer = np.repeat(preprocessed_observ[None, ...], self._capacity, 2)
     self._step = 0
     return self._select_frames()
 
   def _select_frames(self):
     indices = [
-        (self._step - index) % self._capacity for index in self._past_indices]
+        (self._step + index) % self._capacity for index in range(self._capacity)]
     observ = self._buffer[indices]
     if self._flatten:
       observ = np.reshape(observ, (-1,) + observ.shape[2:])

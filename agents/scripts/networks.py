@@ -140,9 +140,6 @@ class AOCPolicy(tf.contrib.rnn.RNNCell):
 
   def __call__(self, observation, state):
     with tf.variable_scope('conv'):
-      obs_shape = observation.shape.dims
-      observation = tf.reshape([obs_shape[0].value * obs_shape[1].value, obs_shape[2].value, obs_shape[3].value,
-                                obs_shape[4].value])
       for kernel_size, stride, nb_kernels in self._conv_layers:
         out = layers.conv2d(observation, num_outputs=nb_kernels, kernel_size=kernel_size,
                             stride=stride, activation_fn=tf.nn.relu,
