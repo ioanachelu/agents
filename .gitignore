@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 logs
+logdir
 # Pip
 pip-selfcheck.json
 *.whl

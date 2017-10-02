@@ -103,15 +103,13 @@ class AOCAlgorithm(object):
 
       next_options = self.get_policy_over_options(network)
       self._current_option = tf.where(self._option_terminated, next_options, self._current_option)
-
-      # self._current_option[self._option_terminated] = self.get_policy_over_options(network)[self._option_terminated]
-
+      # Choose at according to πθ (·|st)
       action = self.get_action(network)
 
       summary = tf.cond(self._should_log, lambda: tf.summary.merge([
-        tf.summary.histogram('action', action),
-        tf.summary.histogram('option', self._current_option),
-        tf.summary.histogram('option_terminated', tf.cast(self._option_terminated, tf.int32))]), str)
+        tf.summary.histogram('current_action', action),
+        tf.summary.histogram('current_option', self._current_option),
+        tf.summary.histogram('last_option_terminated', tf.cast(self._option_terminated, tf.int32))]), str)
 
       increment_frame_counter = self._frame_counter.assign_add(tf.ones(self._num_agents, tf.int32))
 
@@ -123,37 +121,40 @@ class AOCAlgorithm(object):
           self._last_option_terminated.assign(tf.cast(self._option_terminated, tf.int32)),
           increment_frame_counter,
       ]):
-        self._option_terminated = self.get_termination(network)
-        return tf.cast(action, dtype=tf.int32), tf.identity(summary)
 
-  def experience(self, observ, action, reward, done, nextob):
+        return tf.cast(action, dtype=tf.int32), self._current_option, self._option_terminated, tf.identity(summary)
+
+  def experience(self, observ, option, action, reward, done, nextob, option_terminated):
     with tf.name_scope('experience/'):
       return tf.cond(
         self._is_training,
-        lambda: self._define_experience(observ, action, reward, done, nextob), str)
+        lambda: self._define_experience(observ, option, action, reward, done, nextob, option_terminated), str)
 
-  def _define_experience(self, observ, action, reward, done, nextob):
-      new_reward = reward - \
-                   self._last_option_terminated * self._delib_cost * tf.cast(self._frame_counter > 1, dtype=tf.float32)
+  def _define_experience(self, observ, option, action, reward, done, nextob, option_terminated):
+    # if the current option ot terminates in st+1 then
+    #     choose new ot+1 with -soft(µ(st+1)) => next_time
+    network_next_obs = self._network(
+      nextob[:, None], tf.ones(nextob.shape[0]), self._last_state)
+    self._option_terminated = self.get_termination(network)
 
-      batch = observ, self._current_option, action, new_reward, tf.cast(done, tf.int32), nextob,
-      tf.cast(self._option_terminated, tf.int32)
-      append = self._episodes.append(batch, tf.range(len(self._batch_env)))
-      with tf.control_dependencies([append]):
-        # pylint: disable=g-long-lambda
-        summary = tf.cond(self._should_log, lambda: tf.summary.merge([
-          # update_filters,
-          # self._observ_filter.summary(),
-          # self._reward_filter.summary(),
-          tf.summary.scalar('memory_size', self._memory_index),
-          # tf.summary.image(observ),
-          tf.summary.histogram('observ', observ),
-          tf.summary.histogram('action', action),
-          tf.summary.histogram('option', self._current_option),
-          tf.summary.histogram('option_terminated', tf.cast(self._option_terminated, dtype=tf.int32)),
-          # tf.summary.histogram('done', tf.cast(done, dtype=tf.int32)),
-          tf.summary.scalar('normalized_reward', tf.reduce_mean(reward))]), str)
-        return summary
+    # Take action at in st, observe rt, st+1
+    # new_rt ← rt + ct
+    new_reward = reward - \
+                 option_terminated * self._delib_cost #* tf.cast(self._frame_counter > 1, dtype=tf.float32)
+
+    batch = observ, option, action, new_reward, tf.cast(done, tf.int32), nextob, tf.cast(self._option_terminated, tf.int32)
+    append = self._episodes.append(batch, tf.range(len(self._batch_env)))
+    with tf.control_dependencies([append]):
+      # pylint: disable=g-long-lambda
+      summary = tf.cond(self._should_log, lambda: tf.summary.merge([
+        tf.summary.scalar('memory_size', self._memory_index),
+        # tf.summary.image(observ),
+        tf.summary.histogram('observ', observ),
+        tf.summary.histogram('action', action),
+        tf.summary.histogram('option', option),
+        tf.summary.histogram('option_terminated', tf.cast(self._option_terminated, dtype=tf.int32)),
+        tf.summary.scalar('new_reward', tf.reduce_mean(reward))]), str)
+      return summary
 
   def end_episode(self, agent_indices):
     with tf.name_scope('end_episode/'):
@@ -243,10 +244,11 @@ class AOCAlgorithm(object):
         return tf.summary.merge([network_summary, weight_summary])
 
   def _update_network(self, observ, option, action, reward, done, nextob, option_terminated, length):
+    mask =
     self.probability_of_random_option = self._exploration_options.value(self._step)
     with tf.name_scope('update_network'):
       # add delib if  option termination because it isn't part of V
-      delib = self._delib_cost * tf.cast(self._frame_counter > 1, dtype=np.float32)
+      delib = self._delib_cost #* tf.cast(self._frame_counter > 1, dtype=np.float32)
       network = self._network(observ, length)
       network_next = self._network(nextob, length)
       # raw_v = tf.reduce_sum(tf.multiply(self.get_V(network), tf.one_hot(length, self._config.max_length)), axis=1)
