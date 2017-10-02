@@ -601,10 +601,8 @@ class FrameHistoryGrayscaleResize(object):
     return gym.spaces.Box(low, high)
 
   def get_preprocessed_frame(self, observ):
-    resized_observ = tf.image.resize_images(observ, [self.resized_width, self.resized_height])
-    luminance_observ = resized_observ *  \
-                        tf.tile(tf.convert_to_tensor([.2126, .7152, .0722])[None, None, :],
-                             [self.resized_width, self.resized_height, 1])
+    resized_observ = np.resize(observ, [self.resized_width, self.resized_height, 3])
+    luminance_observ = np.dot(resized_observ, [.2126, .7152, .0722])
     rescaled_observ = luminance_observ / 255
 
     return rescaled_observ
@@ -613,23 +611,30 @@ class FrameHistoryGrayscaleResize(object):
     observ, reward, done, info = self._env.step(action)
     preprocessed_observ = self.get_preprocessed_frame(observ)
     self._step += 1
-    self._buffer[self._step % self._capacity] = preprocessed_observ
+    self._buffer[:, :, self._step % self._capacity] = preprocessed_observ
     observ = self._select_frames()
     return observ, reward, done, info
 
   def reset(self):
     observ = self._env.reset()
     preprocessed_observ = self.get_preprocessed_frame(observ)
-    if self.history_length == 1:
-      preprocessed_observ = [None, ...]
-    self._buffer = np.repeat(preprocessed_observ[None, ...], self._capacity, 2)
+    if self._capacity == 1:
+      preprocessed_observ = [..., None]
+    self._buffer = np.repeat(preprocessed_observ[..., None], self._capacity, 2)
     self._step = 0
     return self._select_frames()
 
   def _select_frames(self):
-    indices = [
-        (self._step + index) % self._capacity for index in range(self._capacity)]
-    observ = self._buffer[indices]
-    if self._flatten:
-      observ = np.reshape(observ, (-1,) + observ.shape[2:])
+    indices = [(self._step + index) % self._capacity for index in range(self._capacity)]
+    observ = self._buffer[:, :, indices]
+
     return observ
+
+# if __name__ == '__main__':
+#   env = gym.make("Breakout-v0")
+#   env = FrameHistoryGrayscaleResize(env)
+#   space = env.observation_space
+#   first_frame = env.reset()
+#   sencod_frame = env.step(0)
+#   third_frame = env.step(0)
+#   forth_frame = env.step(0)

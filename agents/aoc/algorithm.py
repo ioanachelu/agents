@@ -39,9 +39,9 @@ class AOCAlgorithm(object):
     # self._observ_filter = normalize.StreamingNormalize(
     #   self._batch_env.observ[0], center=True, scale=True, clip=5,
     #   name='normalize_observ')
-    self._reward_filter = normalize.StreamingNormalize(
-      self._batch_env.reward[0], center=False, scale=True, clip=10,
-      name='normalize_reward')
+    # self._reward_filter = normalize.StreamingNormalize(
+    #   self._batch_env.reward[0], center=False, scale=True, clip=10,
+    #   name='normalize_reward')
 
     self._memory_index = tf.Variable(0, False)
     use_gpu = self._config.use_gpu and utility.available_gpus()
@@ -67,8 +67,8 @@ class AOCAlgorithm(object):
 
     template = (
       self._batch_env.observ[0], self._batch_env.action[0], self._batch_env.action[0],
-      self._batch_env.reward[0], self._option_terminated[0], self._batch_env.observ[0],
-      self._option_terminated[0], tf.cast(self._batch_env.reward[0], dtype=tf.int32))
+      self._batch_env.reward[0], tf.cast(self._option_terminated[0], tf.int32), self._batch_env.observ[0],
+      tf.cast(self._option_terminated[0], tf.int32))
     self._memory = memory.EpisodeMemory(
       template, config.update_every, config.max_length, 'memory')
 
@@ -77,8 +77,12 @@ class AOCAlgorithm(object):
         template, len(batch_env), config.max_length, 'episodes')
       self._last_state = utility.create_nested_vars(
         cell.zero_state(len(batch_env), tf.float32))
-      # self._last_action = tf.Variable(
-      #   tf.zeros_like(self._batch_env.action), False, name='last_action')
+      self._last_action = tf.Variable(
+        tf.zeros_like(self._batch_env.action), False, name='last_action')
+      self._last_option = tf.Variable(
+        tf.zeros_like(self._batch_env.action), False, name='last_option')
+      self._last_option_terminated = tf.Variable(
+        tf.zeros_like(self._batch_env.action), False, name='option_terminated')
 
   def begin_episode(self, agent_indices):
     with tf.name_scope('begin_episode/'):
@@ -111,54 +115,65 @@ class AOCAlgorithm(object):
 
       action = self.get_action(network)
 
-    return tf.cast(action, dtype=tf.int32) , tf.constant('')
+      summary = tf.cond(self._should_log, lambda: tf.summary.merge([
+        tf.summary.histogram('action', action),
+        tf.summary.histogram('option', self._current_option),
+        tf.summary.histogram('option_terminated', tf.cast(self._option_terminated, tf.int32))]), str)
 
-  def experience(self, observ, action, reward, done, nextob, agent_indices):
+      with tf.control_dependencies([
+          utility.assign_nested_vars(self._last_state, network.state),
+          self._last_action.assign(tf.cast(action, tf.int32)),
+          self._last_option.assign(self._current_option),
+          self._last_option_terminated.assign(tf.cast(self._option_terminated, tf.int32))]):
+        return tf.cast(action, dtype=tf.int32), tf.identity(summary)
+
+  def experience(self, observ, action, reward, done, nextob):
     with tf.name_scope('experience/'):
       return tf.cond(
         self._is_training,
-        lambda: self._define_experience(observ, action, reward, done, nextob, agent_indices), str)
+        lambda: self._define_experience(observ, action, reward, done, nextob), str)
 
-  def _define_experience(self, observ, action, reward, done, nextob, agent_indices):
+  def _define_experience(self, observ, action, reward, done, nextob):
     """Implement the branch of experience() entered during training."""
-    update_filters = tf.summary.merge([
+    # update_filters = tf.summary.merge([
       # self._observ_filter.update(observ),
-      self._reward_filter.update(reward)])
+      # self._reward_filter.update(reward)])
 
     # norm_observ = self._observ_filter.transform(observ)
-    norm_reward = self._reward_filter.transform(reward)
+    # norm_reward = self._reward_filter.transform(reward)
 
-    with tf.control_dependencies([update_filters]):
+    # with tf.control_dependencies([update_filters]):
       # if self._config.train_on_agent_action:
       #   # NOTE: Doesn't seem to change much.
       #   action = self._last_action
 
-      increment_frame_counter = self._frame_counter.assign_add(tf.ones(self._num_agents, tf.int32))
-
+    increment_frame_counter = self._frame_counter.assign_add(tf.ones(self._num_agents, tf.int32))
+    with tf.control_dependencies([increment_frame_counter]):
       float_option_terminated = tf.cast(self._option_terminated, dtype=tf.float32)
 
-      new_reward = norm_reward - \
+      new_reward = reward - \
                    float_option_terminated * self._delib_cost * tf.cast(self._frame_counter, dtype=tf.float32)
 
       self._option_terminated = self.get_termination()
 
-      batch = observ, self._current_option, action, new_reward, done, nextob, self._option_terminated, agent_indices
+      batch = observ, self._current_option, action, new_reward, tf.cast(done, tf.int32), nextob,
+      tf.cast(self._option_terminated, tf.int32)
       append = self._episodes.append(batch, tf.range(len(self._batch_env)))
-    with tf.control_dependencies([append]):
-      # pylint: disable=g-long-lambda
-      summary = tf.cond(self._should_log, lambda: tf.summary.merge([
-        update_filters,
-        # self._observ_filter.summary(),
-        self._reward_filter.summary(),
-        tf.summary.scalar('memory_size', self._memory_index),
-        # tf.summary.image(observ),
-        tf.summary.histogram('observ', observ),
-        tf.summary.scalar('action', action),
-        tf.summary.scalar('option', self._current_option),
-        tf.summary.scalar('option_terminated', tf.cast(self._option_terminated, dtype=tf.int32)),
-        tf.summary.scalar('done', tf.cast(done, dtype=tf.int32)),
-        tf.summary.scalar('normalized_reward', norm_reward)]), str)
-      return summary
+      with tf.control_dependencies([append]):
+        # pylint: disable=g-long-lambda
+        summary = tf.cond(self._should_log, lambda: tf.summary.merge([
+          # update_filters,
+          # self._observ_filter.summary(),
+          # self._reward_filter.summary(),
+          tf.summary.scalar('memory_size', self._memory_index),
+          # tf.summary.image(observ),
+          tf.summary.histogram('observ', observ),
+          tf.summary.histogram('action', action),
+          tf.summary.histogram('option', self._current_option),
+          tf.summary.histogram('option_terminated', tf.cast(self._option_terminated, dtype=tf.int32)),
+          # tf.summary.histogram('done', tf.cast(done, dtype=tf.int32)),
+          tf.summary.scalar('normalized_reward', tf.reduce_mean(reward))]), str)
+        return summary
 
   def end_episode(self, agent_indices):
     with tf.name_scope('end_episode/'):
@@ -232,12 +247,12 @@ class AOCAlgorithm(object):
           self._memory_index, self._config.update_every)
       with tf.control_dependencies([assert_full]):
         data = self._memory.data()
-      (observ, option, action, reward, done, nextob, option_terminated, agent_index), length = data
+      (observ, option, action, reward, done, nextob, option_terminated), length = data
       with tf.control_dependencies([tf.assert_greater(length, 0)]):
         length = tf.identity(length)
 
       network_summary = self._update_network(
-        observ, option, action, reward, done, nextob, option_terminated, agent_index, length)
+        observ, option, action, reward, tf.cast(done, tf.bool), nextob, tf.cast(option_terminated, tf.bool), length)
 
       with tf.control_dependencies([network_summary]):
         clear_memory = tf.group(
@@ -247,7 +262,7 @@ class AOCAlgorithm(object):
             tf.trainable_variables(), self._config.weight_summaries)
         return tf.summary.merge([network_summary, weight_summary])
 
-  def _update_network(self, observ, option, action, reward, done, nextob, option_terminated, agent_index, length):
+  def _update_network(self, observ, option, action, reward, done, nextob, option_terminated, length):
     self.probability_of_random_option = self._exploration_options.value(self._step)
     with tf.name_scope('update_network'):
       # add delib if  option termination because it isn't part of V
