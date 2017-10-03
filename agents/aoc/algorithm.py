@@ -244,21 +244,20 @@ class AOCAlgorithm(object):
         return tf.summary.merge([network_summary, weight_summary])
 
   def _update_network(self, observ, option, action, reward, done, nextob, option_terminated, length):
-    mask =
     self.probability_of_random_option = self._exploration_options.value(self._step)
     with tf.name_scope('update_network'):
       # add delib if  option termination because it isn't part of V
       delib = self._delib_cost #* tf.cast(self._frame_counter > 1, dtype=np.float32)
       network = self._network(observ, length)
-      network_next = self._network(nextob, length)
+      # network_next = self._network(nextob, length)
       # raw_v = tf.reduce_sum(tf.multiply(self.get_V(network), tf.one_hot(length, self._config.max_length)), axis=1)
-      v = self.get_V(network_next) - tf.tile(delib[:, None], [1, self._config.max_length])
+      v = self.get_V(network) - tf.tile(delib[:, None], [1, self._config.max_length])
       # q = tf.reduce_sum(tf.multiply(self.get_Q(network, option), tf.one_hot(length, self._config.max_length)), axis=1)
-      q = self.get_Q(network_next, option)
+      q = self.get_Q(network, option)
       new_v = tf.where(option_terminated, v, q)
       R = tf.cast(tf.logical_not(done), dtype=tf.float32) * new_v
 
-      advantage = utility.lambda_advantage(reward, R, length, self._config.discount)
+      advantage = utility.discounted_return_n_step(reward, length, self._config.discount, R)
 
       mean, variance = tf.nn.moments(advantage, axes=[0, 1], keep_dims=True)
       advantage = (advantage - mean) / (tf.sqrt(variance) + 1e-8)
