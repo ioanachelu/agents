@@ -45,7 +45,7 @@ class AOCAlgorithm(object):
       cell = self._config.network(self._action_size)
 
       self._option_terminated = tf.Variable(
-        np.zeros([self._num_agents], dtype=np.bool), True, name='option_terminated', dtype=tf.bool)
+        np.zeros([self._num_agents], dtype=np.bool), False, name='option_terminated', dtype=tf.bool)
       self._frame_counter = tf.Variable(
         np.zeros([self._num_agents], dtype=np.int32), False, name='frame_counter', dtype=tf.int32)
       self._current_option = tf.Variable(
@@ -128,19 +128,22 @@ class AOCAlgorithm(object):
     with tf.name_scope('experience/'):
       return tf.cond(
         self._is_training,
-        lambda: self._define_experience(observ, option, action, reward, done, nextob, option_terminated), str)
+        lambda: self._define_experience(observ, option, action, reward, done, nextob, option_terminated),
+        lambda: (tf.ones_like(option_terminated, dtype=tf.bool), str()))
 
   def _define_experience(self, observ, option, action, reward, done, nextob, option_terminated):
     # if the current option ot terminates in st+1 then
     #     choose new ot+1 with -soft(µ(st+1)) => next_time
+    network = self._network(
+      observ[:, None], tf.ones(observ.shape[0]), self._last_state)
     network_next_obs = self._network(
       nextob[:, None], tf.ones(nextob.shape[0]), self._last_state)
-    self._option_terminated = self.get_termination(network)
+    self._option_terminated = self.get_termination(network_next_obs)
 
     # Take action at in st, observe rt, st+1
     # new_rt ← rt + ct
     new_reward = reward - \
-                 option_terminated * self._delib_cost #* tf.cast(self._frame_counter > 1, dtype=tf.float32)
+                 tf.cast(option_terminated, tf.float32) * self._delib_cost #* tf.cast(self._frame_counter > 1, dtype=tf.float32)
 
     batch = observ, option, action, new_reward, tf.cast(done, tf.int32), nextob, tf.cast(self._option_terminated, tf.int32)
     append = self._episodes.append(batch, tf.range(len(self._batch_env)))
@@ -154,7 +157,7 @@ class AOCAlgorithm(object):
         tf.summary.histogram('option', option),
         tf.summary.histogram('option_terminated', tf.cast(self._option_terminated, dtype=tf.int32)),
         tf.summary.scalar('new_reward', tf.reduce_mean(reward))]), str)
-      return summary
+      return self._option_terminated, summary
 
   def end_episode(self, agent_indices):
     with tf.name_scope('end_episode/'):
@@ -249,42 +252,45 @@ class AOCAlgorithm(object):
       # add delib if  option termination because it isn't part of V
       delib = self._delib_cost #* tf.cast(self._frame_counter > 1, dtype=np.float32)
       network = self._network(observ, length)
+      network_next = self._network(nextob, length)
       # network_next = self._network(nextob, length)
       # raw_v = tf.reduce_sum(tf.multiply(self.get_V(network), tf.one_hot(length, self._config.max_length)), axis=1)
-      v = self.get_V(network) - tf.tile(delib[:, None], [1, self._config.max_length])
+      v = self.get_V(network_next) - tf.tile(delib[:, None], [1, self._config.max_length])
       # q = tf.reduce_sum(tf.multiply(self.get_Q(network, option), tf.one_hot(length, self._config.max_length)), axis=1)
-      q = self.get_Q(network, option)
+      q = self.get_Q(network_next, option)
       new_v = tf.where(option_terminated, v, q)
-      R = tf.cast(tf.logical_not(done), dtype=tf.float32) * new_v
+      G = tf.cast(tf.logical_not(done), dtype=tf.float32) * new_v
 
-      advantage = utility.discounted_return_n_step(reward, length, self._config.discount, R)
+      real_length = utility.get_length_option(option_terminated, length)
+      timestep = tf.tile(tf.range(reward.shape[1].value)[None, ...], [reward.shape[0].value, 1])
+      mask = tf.cast(timestep < real_length[:, None], tf.float32)
 
-      mean, variance = tf.nn.moments(advantage, axes=[0, 1], keep_dims=True)
-      advantage = (advantage - mean) / (tf.sqrt(variance) + 1e-8)
+      G = utility.discounted_return_n_step(reward, real_length, self._config.discount, G)
 
-      advantage = tf.Print(
-        advantage, [tf.reduce_mean(advantage)],
-        'normalized advantage: ')
+      # mean, variance = tf.nn.moments(advantage, axes=[0, 1], keep_dims=True)
+      # advantage = (advantage - mean) / (tf.sqrt(variance) + 1e-8)
 
-      q_opt = self.get_Q(network, option)
-      v = self.get_V(network)
+      G = tf.Print(G, [tf.reduce_mean(G)], 'Return G: ')
+
+      # q_opt = self.get_Q(network, option)
+      # v = self.get_V(network)
       intra_option_policy = self.get_intra_option_policy(network, option)
       responsible_outputs = self.get_responsible_outputs(intra_option_policy, action)
-      o_termination = self.get_option_termination(network, option)
+      o_termination = self.get_option_termination(network_next, option)
+
       with tf.name_scope('critic_loss'):
-        td_error = advantage - q_opt
-        critic_loss = tf.reduce_mean(self._config.critic_coef * 0.5 * tf.square((td_error)))
+        td_error = tf.stop_gradient(G) - q
+        critic_loss = tf.reduce_mean(self._mask(self._config.critic_coef * 0.5 * tf.square((td_error)), real_length))
       with tf.name_scope('termination_loss'):
-        term_loss = -tf.reduce_mean(o_termination * (tf.stop_gradient(q_opt) - tf.stop_gradient(v) +
+        term_loss = tf.reduce_mean(mask * o_termination * (tf.stop_gradient(q) - tf.stop_gradient(v) +
                                                           tf.tile(delib[:, None],
                                                                   [1, self._config.max_length])))
       with tf.name_scope('entropy_loss'):
-        entropy_loss = self._config.entropy_coef * tf.reduce_mean(tf.reduce_sum(intra_option_policy *
+        entropy_loss = self._config.entropy_coef * tf.reduce_mean(mask * tf.reduce_sum(intra_option_policy *
                                                                                 tf.log(intra_option_policy +
                                                                                        1e-7), axis=2))
       with tf.name_scope('policy_loss'):
-        policy_loss = -tf.reduce_sum(
-                    tf.log(responsible_outputs + 1e-7) * advantage)
+        policy_loss = -tf.reduce_sum(mask * tf.log(responsible_outputs + 1e-7) * td_error)
 
       total_loss = policy_loss + entropy_loss + critic_loss + term_loss
 
@@ -293,6 +299,10 @@ class AOCAlgorithm(object):
       optimize = self._network_optimizer.apply_gradients(
         zip(gradients, variables))
       summary = tf.summary.merge([
+        tf.summary.scalar('avg_critic_loss', critic_loss),
+        tf.summary.scalar('avg_termination_loss', term_loss),
+        tf.summary.scalar('avg_entropy_loss', entropy_loss),
+        tf.summary.scalar('avg_policy_loss', policy_loss),
         tf.summary.scalar('gradient_norm', tf.global_norm(gradients)),
         utility.gradient_summaries(
           zip(gradients, variables))])
@@ -332,3 +342,21 @@ class AOCAlgorithm(object):
     q_values = tf.reduce_sum(tf.multiply(network.q_val, current_option_option_one_hot),
                                               reduction_indices=2, name="Values_Q")
     return q_values
+
+  def _mask(self, tensor, length):
+    """Set padding elements of a batch of sequences to zero.
+
+    Useful to then safely sum along the time dimension.
+
+    Args:
+      tensor: Tensor of sequences.
+      length: Batch of sequence lengths.
+
+    Returns:
+      Masked sequences.
+    """
+    with tf.name_scope('mask'):
+      range_ = tf.range(tensor.shape[1].value)
+      mask = tf.cast(range_[None, :] < length[:, None], tf.float32)
+      masked = tensor * mask
+      return tf.check_numerics(masked, 'masked')

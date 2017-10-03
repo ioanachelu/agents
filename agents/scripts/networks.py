@@ -140,36 +140,38 @@ class AOCPolicy(tf.contrib.rnn.RNNCell):
 
   def __call__(self, observation, state):
     with tf.variable_scope('conv'):
-      for kernel_size, stride, nb_kernels in self._conv_layers:
+      for i, (kernel_size, stride, nb_kernels) in enumerate(self._conv_layers):
         out = layers.conv2d(observation, num_outputs=nb_kernels, kernel_size=kernel_size,
                             stride=stride, activation_fn=tf.nn.relu,
                             variables_collections=tf.get_collection("variables"),
-                            outputs_collections="activations")
-      out = layers.flatten(out)
+                            outputs_collections="activations", scope="conv_{}".format(i))
+      out = layers.flatten(out, scope="flatten")
       with tf.variable_scope("fc"):
-        for nb_filt in self._fc_layers:
+        for i, nb_filt in enumerate(self._fc_layers):
           out = layers.fully_connected(out, num_outputs=nb_filt,
                                            activation_fn=None,
                                            variables_collections=tf.get_collection("variables"),
-                                           outputs_collections="activations")
+                                           outputs_collections="activations", scope="fc_{}".format(i))
           out = layer_norm_fn(out, relu=True)
-
-      self.termination = layers.fully_connected(out, num_outputs=self._nb_options,
-                                                                activation_fn=tf.nn.sigmoid,
-                                                                variables_collections=tf.get_collection("variables"),
-                                                                outputs_collections="activations")
-      self.q_val = layers.fully_connected(out, num_outputs=self._nb_options,
-                                                  activation_fn=None,
-                                                  variables_collections=tf.get_collection("variables"),
-                                                  outputs_collections="activations")
-      self.options = []
-      for _ in range(self._nb_options):
-        option = layers.fully_connected(out, num_outputs=self._action_size,
-                                            activation_fn=tf.nn.softmax,
-                                            variables_collections=tf.get_collection("variables"),
-                                            outputs_collections="activations")
-        self.options.append(tf.expand_dims(option, 1))
-      self.options = tf.concat(self.options, 1)
+      with tf.variable_scope("option_term"):
+        self.termination = layers.fully_connected(out, num_outputs=self._nb_options,
+                                                                  activation_fn=tf.nn.sigmoid,
+                                                                  variables_collections=tf.get_collection("variables"),
+                                                                  outputs_collections="activations")
+      with tf.variable_scope("q_val"):
+        self.q_val = layers.fully_connected(out, num_outputs=self._nb_options,
+                                                    activation_fn=None,
+                                                    variables_collections=tf.get_collection("variables"),
+                                                    outputs_collections="activations")
+      with tf.variable_scope("i_o_policies"):
+        self.options = []
+        for _ in range(self._nb_options):
+          option = layers.fully_connected(out, num_outputs=self._action_size,
+                                              activation_fn=tf.nn.softmax,
+                                              variables_collections=tf.get_collection("variables"),
+                                              outputs_collections="activations")
+          self.options.append(tf.expand_dims(option, 1))
+        self.options = tf.concat(self.options, 1)
 
     return (self.termination, self.q_val, self.options), state
 

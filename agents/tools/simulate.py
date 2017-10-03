@@ -71,17 +71,16 @@ def simulate(batch_env, algo, log=True, reset=False):
     """
 
     prevob = batch_env.observ + 0  # Ensure a copy of the variable value.
-    action, option, option_terminated, frame_counter, step_summary = algo.perform(prevob)
+    action, option, option_terminated, step_summary = algo.perform(prevob)
     action.set_shape(batch_env.action.shape)
     with tf.control_dependencies([batch_env.simulate(action)]):
       add_score = score.assign_add(batch_env.reward)
       inc_length = length.assign_add(tf.ones(len(batch_env), tf.int32))
     with tf.control_dependencies([add_score, inc_length]):
-      experience_summary = algo.experience(
+      next_state_option_terminated, experience_summary = algo.experience(
           prevob, option, batch_env.action, batch_env.reward, batch_env.done,
           batch_env.observ, option_terminated)
-    terminate = option_terminated * ()
-    return tf.summary.merge([step_summary, experience_summary]), option_terminated, frame_counter
+    return tf.summary.merge([step_summary, experience_summary]), next_state_option_terminated
 
   def _define_end_episode(agent_indices):
     """Notify the algorithm of ending episodes.
@@ -133,10 +132,9 @@ def simulate(batch_env, algo, log=True, reset=False):
         tf.cast(tf.shape(agent_indices)[0], tf.bool),
         lambda: _define_begin_episode(agent_indices), str)
     with tf.control_dependencies([begin_episode]):
-      step, option_terminated = _define_step()
-    with tf.control_dependencies([step, option_terminated]):
-      terminate = option_terminated *
-      agent_indices = tf.cast(tf.where(batch_env.done * option_terminated)[:, 0], tf.int32)
+      step, next_state_option_terminated = _define_step()
+    with tf.control_dependencies([step, next_state_option_terminated]):
+      agent_indices = tf.cast(tf.where(tf.cast(tf.cast(batch_env.done, tf.int32) * tf.cast(next_state_option_terminated, tf.int32), tf.bool))[:, 0], tf.int32)
       end_episode = tf.cond(
           tf.cast(tf.shape(agent_indices)[0], tf.bool),
           lambda: _define_end_episode(agent_indices), str)

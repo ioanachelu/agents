@@ -66,7 +66,13 @@ def aoc():
   # Network
   network = networks.AOCPolicy
   weight_summaries = dict(
-      all=r'.*')
+      all=r'.*',
+      conv=r'.*/conv/.*',
+      fc=r'.*/fc/.*',
+      term=r'.*/option_term/.*',
+      q_val=r'.*/q_val/.*',
+      policy=r'.*/i_o_policies/.*')
+
   conv_layers = (8, 4, 16), (4, 2, 32)
   fc_layers = 256,
   # Optimization

@@ -88,6 +88,45 @@ def discounted_return(reward, length, discount):
       tf.zeros_like(reward[:, -1]), 1, False), [1, 0]), [1])
   return tf.check_numerics(tf.stop_gradient(return_), 'return')
 
+def discounted_return_n_step(reward, length, discount, values):
+  """Discounted n-step returns Monte-Carlo returns."""
+  timestep = tf.tile(tf.range(reward.shape[1].value)[None, ...], [reward.shape[0].value, 1])
+  # mask = tf.cast(timestep < length[:, None], tf.float32)
+  indices_mask = tf.where(timestep < length[:, None])
+  length = tf.Print(length, [length], "length")
+  indices_mask = tf.Print(indices_mask, [indices_mask], "Indices mask")
+  indices_mask2 = tf.gather_nd(values, indices_mask)
+  indices_mask2 = tf.Print(indices_mask2, [indices_mask2], "Indices mask2")
+  value = tf.gather(indices_mask2, length - 1)
+  augmented_rewards = [tf.concat([rewards, value], 0) for rewards, value in
+                       zip(tf.split(tf.gather_nd(reward, indices_mask), length),
+                           tf.split(tf.transpose(value), tf.ones_like(length)))]
+  lengths = tf.split(length, tf.ones_like(length))
+  padded_augmented_rewards = tf.stack([tf.pad(a_r, [[0, (reward.shape[1].value - length[0] - 1)]]) for a_r, length in zip(augmented_rewards, lengths)], 0)
+  return_ = tf.reverse(tf.transpose(tf.scan(
+      lambda agg, cur: cur + discount * agg,
+      tf.transpose(tf.reverse(padded_augmented_rewards, [1]), [1, 0]),
+      tf.zeros_like(reward[:, -1]), 1, False), [1, 0]), [1])
+  return tf.check_numerics(tf.stop_gradient(return_), 'return')
+
+# def get_length_option(option_terminated, length):
+#   real_length_option_terminated = tf.transpose(tf.map_fn(lambda f: tf.where(tf.cast(f, dtype=tf.bool))[0],
+#                                                          tf.cast(option_terminated, dtype=tf.int64)), [1, 0])[0]
+#   real_length_option_terminated = tf.cast(real_length_option_terminated, dtype=tf.int32)
+#   new_length = tf.where((real_length_option_terminated < length), real_length_option_terminated, length)
+#
+#   return new_length
+
+def get_length_option(option_terminated, length):
+  real_length_option_terminated = tf.transpose(tf.map_fn(lambda f: tf.cond(tf.cast(tf.shape(tf.where(tf.cast(f, dtype=tf.bool)))[0], tf.bool),
+                                                                           lambda: tf.where(tf.cast(f, dtype=tf.bool))[
+                                                                             0],
+                                                         lambda: tf.cast(option_terminated.shape[1].value, tf.int64)[..., None]),
+                                                         tf.cast(option_terminated, dtype=tf.int64)), [1, 0])[0]
+  real_length_option_terminated = tf.cast(real_length_option_terminated, dtype=tf.int32)
+  new_length = tf.where((real_length_option_terminated < length), real_length_option_terminated, length)
+
+  return new_length
 
 def fixed_step_return(reward, value, length, discount, window):
   """N-step discounted return."""
